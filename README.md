@@ -1,4 +1,6 @@
 Manga Converter
+
+
 Manga Converter is a Python application that converts images from multiple directories into a single PDF file. It provides a simple Graphical User Interface (GUI) to select input and output directories, and to start the conversion process.
 
 Requirements
