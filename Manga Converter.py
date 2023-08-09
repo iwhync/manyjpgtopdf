@@ -8,17 +8,25 @@ from PIL import Image
 from fpdf import FPDF
 import threading
 import queue
+from tempfile import NamedTemporaryFile
+import tempfile
+import fitz
 
 def natural_sort(l):
     convert = lambda text: int(text) if text.isdigit() else text.lower()
     alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', key)]
-    return sorted(l, key = alphanum_key)
+    return sorted(l, key=alphanum_key)
+
+def compress_image(image, quality=35):
+    A4_dim = (595, 842)  # A4 dimensions in points (72 dpi)
+    image_resized = image.resize(A4_dim, Image.ANTIALIAS)
+    return image_resized
 
 def count_images(directory):
     total = 0
-    for folder in os.listdir(directory):
-        if os.path.isdir(os.path.join(directory, folder)):
-            for file in os.listdir(os.path.join(directory, folder)):
+    for folder_name in os.listdir(directory):
+        if os.path.isdir(os.path.join(directory, folder_name)):
+            for file in os.listdir(os.path.join(directory, folder_name)):
                 if file.endswith('.jpg'):
                     total += 1
     return total
@@ -30,54 +38,61 @@ def convert_images_to_pdf(queue):
     total_images = count_images(base_dir)
     processed_images = 0
 
-    pdf = FPDF()
+    pdf_paths = []
 
-    for folder in natural_sort(os.listdir(base_dir)):
-        queue.put(('folder', folder))
-
-        if not os.path.isdir(os.path.join(base_dir, folder)):
+    for folder_name in os.listdir(base_dir):
+        if not os.path.isdir(os.path.join(base_dir, folder_name)):
             continue
 
-        for file in natural_sort(os.listdir(os.path.join(base_dir, folder))):
-            queue.put(('file', file))
+        pdf = FPDF(format='A4')
+        pdf.set_auto_page_break(auto=False, margin=0)
 
+        for file in natural_sort(os.listdir(os.path.join(base_dir, folder_name))):
             if not file.endswith('.jpg'):
                 continue
 
-            img = Image.open(os.path.join(base_dir, folder, file))
+            img_path = os.path.join(base_dir, folder_name, file)
+            img = Image.open(img_path)
 
             if img.size == (0, 0):
                 img.close()
                 continue
 
+            img = compress_image(img)
+
+            # Create a temporary file
+            with NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
+                img.save(tmp_file, format='JPEG', quality=40)
+                temp_path = tmp_file.name
+
             pdf.add_page()
+            pdf.image(temp_path, x=0, y=0, w=210, h=297)  # A4 size in mm
 
-            width, height = img.size
-            aspect = width / height
+            # Remove the temporary file
+            os.unlink(temp_path)
 
-            pdf_width = pdf.w
-            pdf_height = pdf.h - 2*pdf.b_margin
-            img_width = pdf_width
-            img_height = pdf_width / aspect
-
-            if img_height > pdf_height:
-                img_width = pdf_height * aspect
-                img_height = pdf_height
-
-            pdf.image(os.path.join(base_dir, folder, file), x = pdf.l_margin, y = pdf.t_margin, w=img_width, h=img_height)
-
+            # Close the image
             img.close()
 
             processed_images += 1
             progress = 100 * processed_images / total_images
-            queue.put(('progress', progress))
+            queue.put(('progress', progress), block=True) # Block if the queue is full
+
+        output_name = os.path.basename(os.path.normpath(base_dir)) + '-' + folder_name + '.pdf'
+        pdf_path = os.path.join(tempfile.gettempdir(), output_name)
+        pdf.output(pdf_path)
+        pdf_paths.append(pdf_path)
+
+    merged_pdf = fitz.open()
+    for pdf_path in pdf_paths:
+        merged_pdf.insert_pdf(fitz.open(pdf_path))
 
     output_name = os.path.basename(os.path.normpath(base_dir)) + '.pdf'
     pdf_path = os.path.join(output_path, output_name)
-    pdf.output(pdf_path)
+    merged_pdf.save(pdf_path, garbage=4, deflate=True)
 
     queue.put(('done', None))
-
+    
 def start_conversion():
     folder_label.pack()
     file_label.pack()
