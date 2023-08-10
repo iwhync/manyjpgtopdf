@@ -1,9 +1,7 @@
 import os
 import re
 import tkinter as tk
-from tkinter import filedialog
-from tkinter import messagebox
-from tkinter import ttk
+from tkinter import filedialog, messagebox, ttk
 from PIL import Image
 from fpdf import FPDF
 import threading
@@ -17,10 +15,25 @@ def natural_sort(l):
     alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', key)]
     return sorted(l, key=alphanum_key)
 
-def compress_image(image, quality=35):
-    A4_dim = (595, 842)  # A4 dimensions in points (72 dpi)
-    image_resized = image.resize(A4_dim, Image.ANTIALIAS)
-    return image_resized
+def compress_image(image):
+    quality_dict = {'High': 50, 'Medium': 35, 'Low': 20}
+    quality = quality_dict[quality_combo.get()]
+
+    # Get the dimensions of the image
+    width, height = image.size
+
+    # Get the watermark cutoff percentage from the entry widget
+    watermark_percentage = float(watermark_entry.get()) / 100
+
+    # Define the area to crop (excluding the bottom percentage)
+    crop_area = (0, 0, width, height - int(height * watermark_percentage))
+
+    # Crop the image
+    cropped_image = image.crop(crop_area)
+
+    kindle_resolution = (1236, 1648)  # Resolution for Kindle Paperwhite model M2L3EK
+    image_resized = cropped_image.resize(kindle_resolution, Image.ANTIALIAS)
+    return image_resized, quality
 
 def count_images(directory):
     total = 0
@@ -40,11 +53,15 @@ def convert_images_to_pdf(queue):
 
     pdf_paths = []
 
+    # Define the width and height in mm based on the 72 dpi conversion
+    kindle_width_mm = 1236 * 0.352778
+    kindle_height_mm = 1648 * 0.352778
+
     for folder_name in os.listdir(base_dir):
         if not os.path.isdir(os.path.join(base_dir, folder_name)):
             continue
 
-        pdf = FPDF(format='A4')
+        pdf = FPDF(orientation='P', unit='mm', format=(kindle_width_mm, kindle_height_mm))
         pdf.set_auto_page_break(auto=False, margin=0)
 
         for file in natural_sort(os.listdir(os.path.join(base_dir, folder_name))):
@@ -58,15 +75,15 @@ def convert_images_to_pdf(queue):
                 img.close()
                 continue
 
-            img = compress_image(img)
+            img, quality = compress_image(img)
 
             # Create a temporary file
             with NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
-                img.save(tmp_file, format='JPEG', quality=40)
+                img.save(tmp_file, format='JPEG', quality=quality)
                 temp_path = tmp_file.name
 
             pdf.add_page()
-            pdf.image(temp_path, x=0, y=0, w=210, h=297)  # A4 size in mm
+            pdf.image(temp_path, x=0, y=0, w=kindle_width_mm, h=kindle_height_mm)
 
             # Remove the temporary file
             os.unlink(temp_path)
@@ -76,7 +93,7 @@ def convert_images_to_pdf(queue):
 
             processed_images += 1
             progress = 100 * processed_images / total_images
-            queue.put(('progress', progress), block=True) # Block if the queue is full
+            queue.put(('progress', progress), block=True)  # Block if the queue is full
 
         output_name = os.path.basename(os.path.normpath(base_dir)) + '-' + folder_name + '.pdf'
         pdf_path = os.path.join(tempfile.gettempdir(), output_name)
@@ -92,7 +109,7 @@ def convert_images_to_pdf(queue):
     merged_pdf.save(pdf_path, garbage=4, deflate=True)
 
     queue.put(('done', None))
-    
+
 def start_conversion():
     folder_label.pack()
     file_label.pack()
@@ -163,6 +180,23 @@ output_dir_button.pack(side=tk.LEFT)
 
 output_dir_entry = ttk.Entry(frame2, width=50)
 output_dir_entry.pack(side=tk.LEFT)
+
+frame3 = ttk.Frame(root)
+frame3.pack()
+
+quality_label = ttk.Label(frame3, text="Quality:")
+quality_label.pack(side=tk.LEFT)
+
+quality_combo = ttk.Combobox(frame3, values=["High", "Medium", "Low"], state="readonly")
+quality_combo.pack(side=tk.LEFT)
+quality_combo.current(2)  # Default value set to "Medium"
+
+watermark_label = ttk.Label(frame3, text="Watermark cutoff %:")
+watermark_label.pack(side=tk.LEFT)
+
+watermark_entry = ttk.Entry(frame3, width=5)
+watermark_entry.pack(side=tk.LEFT)
+watermark_entry.insert(tk.END, "6.85")  # Default value
 
 convert_button = ttk.Button(root, text="Convert", command=start_conversion)
 convert_button.pack()
